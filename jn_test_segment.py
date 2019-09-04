@@ -95,7 +95,7 @@ def evaluate(args, model, image_list, device):
         img_out.save(name)
 
 
-def main(args):
+def load_dataset(args):
     # read all the images in the folder
     if args.dataset == 'city':
         image_path = os.path.join(args.data_path, "leftImg8bit", args.split, "*", "*.png")
@@ -122,6 +122,8 @@ def main(args):
         print_error_message('No files in directory: {}'.format(image_path))
     image_list = image_list[:5]
     print_info_message('# of images for testing: {}'.format(len(image_list)))
+
+def load_model(args):
 
     if args.model == 'espnetv2':
         from model.segmentation.espnetv2 import espnetv2_seg

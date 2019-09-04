@@ -2,3 +2,4 @@
 __pycache__
 .DS_STORE
 .idea
+/DiCENet-Dimension-wise Convolutions for Efficient Networks.pdf
