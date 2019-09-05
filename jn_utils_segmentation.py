@@ -122,25 +122,26 @@ def load_dataset(args):
         print_error_message('No files in directory: {}'.format(image_path))
     image_list = image_list[:5]
     print_info_message('# of images for testing: {}'.format(len(image_list)))
+    return image_list
 
 def load_model(args):
 
     if args.model == 'espnetv2':
         from model.segmentation.espnetv2 import espnetv2_seg
-        args.classes = seg_classes
+        args.classes = args.num_classes
         model = espnetv2_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=seg_classes)
+        model = dicenet_seg(args, classes=args.classes)
     else:
         print_error_message('{} network not yet supported'.format(args.model))
         exit(-1)
 
     # mdoel information
     num_params = model_parameters(model)
-    flops = compute_flops(model, input=torch.Tensor(1, 3, args.im_size[0], args.im_size[1]))
-    print_info_message('FLOPs for an input of size {}x{}: {:.2f} million'.format(args.im_size[0], args.im_size[1], flops))
-    print_info_message('# of parameters: {}'.format(num_params))
+    # flops = compute_flops(model, input=torch.Tensor(1, 3, args.im_size[0], args.im_size[1]))
+    # print_info_message('FLOPs for an input of size {}x{}: {:.2f} million'.format(args.im_size[0], args.im_size[1], flops))
+    # print_info_message('# of parameters: {}'.format(num_params))
 
     if args.weights_test:
         print_info_message('Loading model weights')
@@ -154,7 +155,7 @@ def load_model(args):
     num_gpus = 0  # JN
     device = 'cuda' if num_gpus > 0 else 'cpu'
     model = model.to(device=device)
-    return model, image_list, device
+    return model, device
     # evaluate(args, model, image_list, device=device)
 
 def load_args(in_args):
@@ -163,6 +164,7 @@ def load_args(in_args):
     parser = ArgumentParser()
 
     # model details
+    parser.add_argument('--dir', default='', help='Edgenets directory.')
     parser.add_argument('--model', default="espnetv2", choices=segmentation_models, help='Model name')
     parser.add_argument('--weights-test', default='', help='Pretrained weights directory.')
     parser.add_argument('--s', default=2.0, type=float, help='scale')
@@ -187,7 +189,7 @@ def load_args(in_args):
         dataset_key = '{}_{}x{}'.format(args.dataset, args.im_size[0], args.im_size[1])
         assert model_key in model_weight_map.keys(), '{} does not exist'.format(model_key)
         assert dataset_key in model_weight_map[model_key].keys(), '{} does not exist'.format(dataset_key)
-        args.weights_test = model_weight_map[model_key][dataset_key]['weights']
+        args.weights_test = args.dir + model_weight_map[model_key][dataset_key]['weights']
         if not os.path.isfile(args.weights_test):
             print_error_message('weight file does not exist: {}'.format(args.weights_test))
 
@@ -206,6 +208,34 @@ def load_args(in_args):
     args.weights = ''
 
     return args
+
+def _freeze(model, freeze=True):
+    for name, child in model.named_children():
+        for param in child.parameters():
+            param.requires_grad = not freeze
+        _freeze(child, freeze=freeze)
+
+def _count_freeze(model):
+    count_requires_grad = 0
+    count_not_requires_grad = 0
+    for name, child in model.named_children():
+        for param in child.parameters():
+            if param.requires_grad == True:
+                count_requires_grad += 1
+            else:
+                count_not_requires_grad += 1
+
+        _count_freeze(child)
+    return count_requires_grad, count_not_requires_grad
+
+def freeze_base(model):
+    _freeze(model.base_net, freeze=True)
+    print(f'Parameters unfrozen = {_count_freeze(model)[0]}, Parameters frozen = {_count_freeze(model)[1]} ')
+
+def unfreeze_base(model):
+    _freeze(model.base_net, freeze=False)
+    print(f'Parameters unfrozen = {_count_freeze(model)[0]}, Parameters frozen = {_count_freeze(model)[1]} ')
+
 
 if __name__ == '__main__':
     in_args = "--model espnetv2 --s 2.0 --dataset city --data-path /home/john/github/data/cityscapes/ --split val --im-size 1024 512"
