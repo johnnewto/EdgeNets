@@ -3,3 +3,7 @@ __pycache__
 .DS_STORE
 .idea
 /DiCENet-Dimension-wise Convolutions for Efficient Networks.pdf
+/.ipynb_checkpoints/
+/results_segmentation/
+/jn-pickels/
+/results-FEC/

@@ -241,9 +241,7 @@ if __name__ == '__main__':
     in_args = "--model espnetv2 --s 2.0 --dataset city --data-path /home/john/github/data/cityscapes/ --split val --im-size 1024 512"
 
     args = load_args(in_args)
-    main(args)
-
-    args = load_args(in_args)
-    model, image_list, device = main(args)
+    model, device = load_model(args)
+    image_list = load_dataset(args)
 
     evaluate(args, model, image_list, device=device)
