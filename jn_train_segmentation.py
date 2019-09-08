@@ -1,4 +1,6 @@
 # ============================================
+from argparse import Namespace
+
 __author__ = "Sachin Mehta"
 __license__ = "MIT"
 __maintainer__ = "Sachin Mehta"
@@ -20,8 +22,7 @@ import time
 import numpy as np
 from utilities.print_utils import *
 
-
-def main(args):
+def load_dataset(args):
     crop_size = args.crop_size
     assert isinstance(crop_size, tuple)
     print_info_message('Running Model at image resolution {}x{} with batch size {}'.format(crop_size[0], crop_size[1],
@@ -42,6 +43,20 @@ def main(args):
                                                coarse=args.coarse)
         val_dataset = CityscapesSegmentation(root=args.data_path, train=False, size=crop_size, scale=args.scale,
                                              coarse=False)
+
+    if args.data_partial < 1.0:
+        l = int(len(train_dataset.images)*args.data_partial)
+        train_dataset.images = train_dataset.images[:l]
+
+        l = int(len(train_dataset.masks)*args.data_partial)
+        train_dataset.masks = train_dataset.masks[:l]
+
+        l = int(len(val_dataset.images) * args.data_partial)
+        val_dataset.images = val_dataset.images[:l]
+
+        l = int(len(val_dataset.masks) * args.data_partial)
+        val_dataset.masks = val_dataset.masks[:l]
+
         seg_classes = len(CITYSCAPE_CLASS_LIST)
         class_wts = torch.ones(seg_classes)
         class_wts[0] = 2.8149201869965
@@ -70,14 +85,16 @@ def main(args):
 
     print_info_message('Training samples: {}'.format(len(train_dataset)))
     print_info_message('Validation samples: {}'.format(len(val_dataset)))
+    return train_dataset, val_dataset, class_wts
 
+def load_model(args):
     if args.model == 'espnetv2':
         from model.segmentation.espnetv2 import espnetv2_seg
-        args.classes = seg_classes
+        args.classes = args.num_seg_classes
         model = espnetv2_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=seg_classes)
+        model = dicenet_seg(args, classes=args.num_seg_classes, dataset='city', scales=[1.0])
     else:
         print_error_message('Arch: {} not yet supported'.format(args.model))
         exit(-1)
@@ -99,24 +116,52 @@ def main(args):
                 m.weight.requires_grad = False
                 m.bias.requires_grad = False
 
+    return model
+
+def lr_scheduler(args):
+    if args.scheduler == 'fixed':
+        step_size = args.step_size
+        step_sizes = [step_size * i for i in range(1, int(math.ceil(args.epochs / step_size)))]
+        from utilities.lr_scheduler import FixedMultiStepLR
+        lr_sch = FixedMultiStepLR(base_lr=args.lr, steps=step_sizes, gamma=args.lr_decay)
+    elif args.scheduler == 'clr':
+        step_size = args.step_size
+        step_sizes = [step_size * i for i in range(1, int(math.ceil(args.epochs / step_size)))]
+        from utilities.lr_scheduler import CyclicLR
+        lr_sch = CyclicLR(min_lr=args.lr, cycle_len=5, steps=step_sizes, gamma=args.lr_decay)
+    elif args.scheduler == 'poly':
+        from utilities.lr_scheduler import PolyLR
+        lr_sch = PolyLR(base_lr=args.lr, max_epochs=args.epochs, power=args.power)
+    elif args.scheduler == 'hybrid':
+        from utilities.lr_scheduler import HybirdLR
+        lr_sch = HybirdLR(base_lr=args.lr, max_epochs=args.epochs, clr_max=args.clr_max,
+                                cycle_len=args.cycle_len)
+    elif args.scheduler == 'linear':
+        from utilities.lr_scheduler import LinearLR
+        lr_sch = LinearLR(base_lr=args.lr, max_epochs=args.epochs)
+    else:
+        print_error_message('{} scheduler Not supported'.format(args.scheduler))
+        exit()
+
+    print_info_message(lr_sch)
+    return lr_sch
+
+def do_train(args, train_dataset, val_dataset, model, optimizer, criterion, lr_scheduler):
+
     num_gpus = torch.cuda.device_count()
     device = 'cuda' if num_gpus > 0 else 'cpu'
 
-    train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
-                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
-
-    optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
-
     num_params = model_parameters(model)
+    crop_size = args.crop_size
     flops = compute_flops(model, input=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
     print_info_message('FLOPs for an input of size {}x{}: {:.2f} million'.format(crop_size[0], crop_size[1], flops))
     print_info_message('Network Parameters: {:.2f} million'.format(num_params))
 
-    writer = SummaryWriter(log_dir=args.savedir, comment='Training and Validation logs')
-    try:
-        writer.add_graph(model, input_to_model=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
-    except:
-        print_log_message("Not able to generate the graph. Likely because your model is not supported by ONNX")
+    # writer = SummaryWriter(log_dir=args.savedir, comment='Training and Validation logs')
+    # try:
+    #     writer.add_graph(model, input_to_model=torch.Tensor(1, 3, args.crop_size[0], args.crop_size[1]))
+    # except:
+    #     print_log_message("Not able to generate the graph. Likely because your model is not supported by ONNX")
 
     start_epoch = 0
     best_miou = 0.0
@@ -132,11 +177,6 @@ def main(args):
                                .format(args.resume, checkpoint['epoch']))
         else:
             print_warning_message("=> no checkpoint found at '{}'".format(args.resume))
-
-    #criterion = nn.CrossEntropyLoss(weight=class_wts, reduction='none', ignore_index=args.ignore_idx)
-    criterion = SegmentationLoss(n_classes=seg_classes, loss_type=args.loss_type,
-                                 device=device, ignore_idx=args.ignore_idx,
-                                 class_wts=class_wts.to(device))
 
     if num_gpus >= 1:
         if num_gpus == 1:
@@ -163,40 +203,14 @@ def main(args):
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                                              pin_memory=True, num_workers=args.workers)
 
-    if args.scheduler == 'fixed':
-        step_size = args.step_size
-        step_sizes = [step_size * i for i in range(1, int(math.ceil(args.epochs / step_size)))]
-        from utilities.lr_scheduler import FixedMultiStepLR
-        lr_scheduler = FixedMultiStepLR(base_lr=args.lr, steps=step_sizes, gamma=args.lr_decay)
-    elif args.scheduler == 'clr':
-        step_size = args.step_size
-        step_sizes = [step_size * i for i in range(1, int(math.ceil(args.epochs / step_size)))]
-        from utilities.lr_scheduler import CyclicLR
-        lr_scheduler = CyclicLR(min_lr=args.lr, cycle_len=5, steps=step_sizes, gamma=args.lr_decay)
-    elif args.scheduler == 'poly':
-        from utilities.lr_scheduler import PolyLR
-        lr_scheduler = PolyLR(base_lr=args.lr, max_epochs=args.epochs, power=args.power)
-    elif args.scheduler == 'hybrid':
-        from utilities.lr_scheduler import HybirdLR
-        lr_scheduler = HybirdLR(base_lr=args.lr, max_epochs=args.epochs, clr_max=args.clr_max,
-                                cycle_len=args.cycle_len)
-    elif args.scheduler == 'linear':
-        from utilities.lr_scheduler import LinearLR
-        lr_scheduler = LinearLR(base_lr=args.lr, max_epochs=args.epochs)
-    else:
-        print_error_message('{} scheduler Not supported'.format(args.scheduler))
-        exit()
-
-    print_info_message(lr_scheduler)
-
     with open(args.savedir + os.sep + 'arguments.json', 'w') as outfile:
         import json
         arg_dict = vars(args)
-        arg_dict['model_params'] = '{} '.format(num_params)
-        arg_dict['flops'] = '{} '.format(flops)
+        # arg_dict['model_params'] = '{} '.format(num_params)
+        # arg_dict['flops'] = '{} '.format(flops)
         json.dump(arg_dict, outfile)
 
-    extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, crop_size[0])
+    extra_info_ckpt = '{}_{}_{}'.format(args.model, args.s, args.crop_size[0])
     for epoch in range(start_epoch, args.epochs):
         lr_base = lr_scheduler.step(epoch)
         # set the optimizer with the learning rate
@@ -207,8 +221,8 @@ def main(args):
 
         print_info_message(
             'Running epoch {} with learning rates: base_net {:.6f}, segment_net {:.6f}'.format(epoch, lr_base, lr_seg))
-        miou_train, train_loss = train(model, train_loader, optimizer, criterion, seg_classes, epoch, device=device)
-        miou_val, val_loss = val(model, val_loader, criterion, seg_classes, device=device)
+        miou_train, train_loss = train(model, train_loader, optimizer, criterion, args.num_seg_classes, epoch, device=device)
+        miou_val, val_loss = val(model, val_loader, criterion, args.num_seg_classes, device=device)
 
         # remember best miou and save checkpoint
         is_best = miou_val > best_miou
@@ -223,16 +237,46 @@ def main(args):
             'optimizer': optimizer.state_dict(),
         }, is_best, args.savedir, extra_info_ckpt)
 
-        writer.add_scalar('Segmentation/LR/base', round(lr_base, 6), epoch)
-        writer.add_scalar('Segmentation/LR/seg', round(lr_seg, 6), epoch)
-        writer.add_scalar('Segmentation/Loss/train', train_loss, epoch)
-        writer.add_scalar('Segmentation/Loss/val', val_loss, epoch)
-        writer.add_scalar('Segmentation/mIOU/train', miou_train, epoch)
-        writer.add_scalar('Segmentation/mIOU/val', miou_val, epoch)
-        writer.add_scalar('Segmentation/Complexity/Flops', best_miou, math.ceil(flops))
-        writer.add_scalar('Segmentation/Complexity/Params', best_miou, math.ceil(num_params))
+        # writer.add_scalar('Segmentation/LR/base', round(lr_base, 6), epoch)
+        # writer.add_scalar('Segmentation/LR/seg', round(lr_seg, 6), epoch)
+        # writer.add_scalar('Segmentation/Loss/train', train_loss, epoch)
+        # writer.add_scalar('Segmentation/Loss/val', val_loss, epoch)
+        # writer.add_scalar('Segmentation/mIOU/train', miou_train, epoch)
+        # writer.add_scalar('Segmentation/mIOU/val', miou_val, epoch)
+        # writer.add_scalar('Segmentation/Complexity/Flops', best_miou, math.ceil(flops))
+        # writer.add_scalar('Segmentation/Complexity/Params', best_miou, math.ceil(num_params))
 
-    writer.close()
+    # writer.close()
+
+def main(args):
+
+    train_dataset, val_dataset, class_wts = load_dataset(args)
+    model = load_model(args)
+
+    num_gpus = torch.cuda.device_count()
+    device = 'cuda' if num_gpus > 0 else 'cpu'
+
+    train_params = [{'params': model.get_basenet_params(), 'lr': args.lr},
+                    {'params': model.get_segment_params(), 'lr': args.lr * args.lr_mult}]
+
+    optimizer = optim.SGD(train_params, momentum=args.momentum, weight_decay=args.weight_decay)
+
+    # num_params = model_parameters(model)
+
+    # crop_size = args.crop_size
+    # flops = compute_flops(model, input=torch.Tensor(1, 3, crop_size[0], crop_size[1]))
+    # print_info_message('FLOPs for an input of size {}x{}: {:.2f} million'.format(crop_size[0], crop_size[1], flops))
+    # print_info_message('Network Parameters: {:.2f} million'.format(num_params))
+
+    lr_sch = lr_scheduler(args)
+
+    #criterion = nn.CrossEntropyLoss(weight=class_wts, reduction='none', ignore_index=args.ignore_idx)
+
+    criterion = SegmentationLoss(n_classes=args.num_seg_classes, loss_type=args.loss_type,
+                                device=device, ignore_idx=args.ignore_idx,
+                                class_wts=class_wts.to(device))
+
+    do_train(args, train_dataset, val_dataset, model, optimizer, criterion, lr_sch)
 
 def load_args(in_args):
     from commons.general_details import segmentation_models, segmentation_schedulers, segmentation_loss_fns, \
@@ -250,6 +294,7 @@ def load_args(in_args):
     parser.add_argument('--dataset', type=str, default='pascal', choices=segmentation_datasets, help='Datasets')
     parser.add_argument('--data-path', type=str, default='', help='dataset path')
     parser.add_argument('--coco-path', type=str, default='', help='MS COCO dataset path')
+    parser.add_argument('--data-partial', default=1.0, type=float, help='train on partial dataset, set from 0 to 1.0')
     parser.add_argument('--savedir', type=str, default='./results_segmentation', help='Location to save the results')
     ## only for cityscapes
     parser.add_argument('--coarse', action='store_true', default=False, help='Want to use coarse annotations or not')
@@ -285,6 +330,8 @@ def load_args(in_args):
     parser.add_argument('--channels', default=3, type=int, help='Input channels')
     parser.add_argument('--num-classes', default=1000, type=int,
                         help='ImageNet classes. Required for loading the base network')
+    parser.add_argument('--num-seg-classes', default=20, type=int,
+                        help='Output classes. Required for loading the seg network')
     parser.add_argument('--finetune', default='', type=str, help='Finetune the segmentation model')
     parser.add_argument('--model-width', default=224, type=int, help='Model width')
     parser.add_argument('--model-height', default=224, type=int, help='Model height')
@@ -320,6 +367,7 @@ def load_args(in_args):
 
     assert len(args.crop_size) == 2, 'crop-size argument must contain 2 values'
     assert args.data_path != '', 'Dataset path is an empty string. Please check.'
+    assert args.data_partial <= 1.0 and args.data_partial > 0 , 'dataset partial size <= 1 and > 0>'
 
     args.crop_size = tuple(args.crop_size)
     timestr = time.strftime("%Y%m%d-%H%M%S")
@@ -332,7 +380,8 @@ if __name__ == "__main__":
 
     in_args = "--model espnetv2 --s 2.0 " \
               "--dataset city --data-path ./vision_datasets/cityscapes/ " \
-              "--batch-size 5 --crop-size 512 256 " \
+              "--data-partial 0.2 " \
+              "--batch-size 10 --crop-size 512 256 " \
               "--model dicenet " \
               "--s 1.75 --lr 0.009 --scheduler hybrid " \
               "--clr-max 61 --epochs 100"

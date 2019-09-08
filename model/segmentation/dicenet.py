@@ -2,6 +2,8 @@
 __author__ = "Sachin Mehta"
 __maintainer__ = "Sachin Mehta"
 # ============================================
+# jn added
+# __init__ (..., scales = [2.0, 1.5, 1.0, 0.5, 0.1]):
 
 import torch
 from torch.nn import init
@@ -18,7 +20,7 @@ class DiCENetSegmentation(nn.Module):
     This class defines the ESPNetv2 architecture for the Semantic Segmenation
     '''
 
-    def __init__(self, args, classes=21, dataset='pascal'):
+    def __init__(self, args, classes=21, dataset='city', scales=[2.0, 1.5, 1.0, 0.5, 0.1]):
         super().__init__()
 
         # =============================================================
@@ -44,13 +46,13 @@ class DiCENetSegmentation(nn.Module):
 
         # dimensions in variable names are shown for an input of 256x256
         self.eff_pool_16x16 = EfficientPyrPool(in_planes=config[3], proj_planes=pyr_plane_proj,
-                                               out_planes=dec_planes[0])
+                                               out_planes=dec_planes[0], scales=scales)
         self.eff_pool_32x32 = EfficientPyrPool(in_planes=dec_planes[0], proj_planes=pyr_plane_proj,
-                                               out_planes=dec_planes[1])
+                                               out_planes=dec_planes[1], scales=scales)
         self.eff_pool_64x64 = EfficientPyrPool(in_planes=dec_planes[1], proj_planes=pyr_plane_proj,
-                                               out_planes=dec_planes[2])
+                                               out_planes=dec_planes[2], scales=scales)
         self.eff_pool_128x128 = EfficientPyrPool(in_planes=dec_planes[2], proj_planes=pyr_plane_proj,
-                                                 out_planes=dec_planes[3], last_layer_br=False)
+                                                 out_planes=dec_planes[3], scales=scales, last_layer_br=False)
 
         self.proj_enc_32x32 = EfficientPWConv(config[2], dec_planes[0])
         self.proj_enc_64x64 = EfficientPWConv(config[1], dec_planes[1])
@@ -159,9 +161,9 @@ class DiCENetSegmentation(nn.Module):
         return F.interpolate(bu_out_128x128, size=x_size, mode='bilinear', align_corners=True) #nn.Upsample(x_size, mode='bilinear', align_corners=True)(bu_out_128x128)
 
 
-def dicenet_seg(args, classes):
+def dicenet_seg(args, classes, dataset='city', scales=[2.0, 1.5, 1.0, 0.5, 0.1]):
     weights = args.weights
-    model = DiCENetSegmentation(args, classes=classes)
+    model = DiCENetSegmentation(args, classes=classes, dataset=dataset, scales=scales)
     if weights:
         import os
         if os.path.isfile(weights):
