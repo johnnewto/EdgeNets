@@ -23,6 +23,21 @@ import numpy as np
 from utilities.print_utils import *
 
 def load_dataset(args):
+    if args.dataset == 'pascal':
+        args.scale = (0.5, 2.0)
+    elif args.dataset == 'city':
+        if args.crop_size[0] == 512:
+            args.scale = (0.25, 0.5)
+        elif args.crop_size[0] == 1024:
+            args.scale = (0.35, 1.0)  # 0.75 # 0.5 -- 59+
+        elif args.crop_size[0] == 2048:
+            args.scale = (1.0, 2.0)
+        else:
+            print_error_message('Select image size from 512x256, 1024x512, 2048x1024')
+        print_log_message('Using scale = ({}, {})'.format(args.scale[0], args.scale[1]))
+    else:
+        print_error_message('{} dataset not yet supported'.format(args.dataset))
+
     crop_size = args.crop_size
     assert isinstance(crop_size, tuple)
     print_info_message('Running Model at image resolution {}x{} with batch size {}'.format(crop_size[0], crop_size[1],
@@ -95,6 +110,9 @@ def load_model(args):
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
         model = dicenet_seg(args, classes=args.num_seg_classes, dataset='city', scales=[1.0])
+    elif args.model == 'shufflenetv2':
+        from model.segmentation.shufflenetv2 import shufflenetv2_seg
+        model = shufflenetv2_seg(args, classes=args.num_seg_classes)
     else:
         print_error_message('Arch: {} not yet supported'.format(args.model))
         exit(-1)
@@ -294,6 +312,9 @@ def load_args(in_args):
     parser.add_argument('--dataset', type=str, default='pascal', choices=segmentation_datasets, help='Datasets')
     parser.add_argument('--data-path', type=str, default='', help='dataset path')
     parser.add_argument('--coco-path', type=str, default='', help='MS COCO dataset path')
+    parser.add_argument('--scale', type=float, nargs='+', default=[0.35, 1.0],
+                        help='dataset transfroms for scaling  (should be a tuple).')
+
     parser.add_argument('--data-partial', default=1.0, type=float, help='train on partial dataset, set from 0 to 1.0')
     parser.add_argument('--savedir', type=str, default='./results_segmentation', help='Location to save the results')
     ## only for cityscapes
@@ -340,20 +361,6 @@ def load_args(in_args):
     random.seed(1882)
     torch.manual_seed(1882)
 
-    if args.dataset == 'pascal':
-        args.scale = (0.5, 2.0)
-    elif args.dataset == 'city':
-        if args.crop_size[0] == 512:
-            args.scale = (0.25, 0.5)
-        elif args.crop_size[0] == 1024:
-            args.scale = (0.35, 1.0)  # 0.75 # 0.5 -- 59+
-        elif args.crop_size[0] == 2048:
-            args.scale = (1.0, 2.0)
-        else:
-            print_error_message('Select image size from 512x256, 1024x512, 2048x1024')
-        print_log_message('Using scale = ({}, {})'.format(args.scale[0], args.scale[1]))
-    else:
-        print_error_message('{} dataset not yet supported'.format(args.dataset))
 
     if not args.finetune:
         from model.weight_locations.classification import model_weight_map
@@ -378,16 +385,30 @@ def load_args(in_args):
 
 if __name__ == "__main__":
 
-    in_args = "--model espnetv2 --s 2.0 " \
-              "--dataset city --data-path ./vision_datasets/cityscapes/ " \
-              "--data-partial 0.2 " \
-              "--batch-size 10 --crop-size 512 256 " \
-              "--model dicenet " \
-              "--s 1.75 --lr 0.009 --scheduler hybrid " \
-              "--clr-max 61 --epochs 100"
+    # in_args = "--dataset city --data-path ./vision_datasets/cityscapes/ " \
+    #           "--data-partial 0.2 " \
+    #           "--batch-size 10 --crop-size 512 256 " \
+    #           "--model dicenet --s 2.0 " \
+    #           "--s 1.75 --lr 0.009 --scheduler hybrid " \
+    #           "--clr-max 61 --epochs 100"
+    #
+    if False:
+        in_args = " \
+                    --model dicenet --s 1.0  \
+                    --data-path /home/john/github/data/FEC-crop-half/  \
+                    --num-classes 3 \
+                "
+        args = load_args(in_args)
+        model = load_model(args)
+    else:
+        in_args = " --model shufflenetv2 --s 0.5  \
+                    --data-path /home/john/github/data/FEC-crop-half/  \
+                    --num-classes 3 \
+                 "
+        args = load_args(in_args)
+        model = load_model(args)
 
-    args = load_args(in_args)
-    main(args)
+    # main(args)
 #
 #     args = load_args(in_args)
 #     model, device = load_model(args)

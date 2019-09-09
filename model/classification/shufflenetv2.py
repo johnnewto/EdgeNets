@@ -130,6 +130,8 @@ class CNNModel(nn.Module):
 
         self.global_pool = nn.AdaptiveAvgPool2d(output_size=1)
 
+        self.out_channel_map = out_channel_map
+
         self.init_params()
 
     def init_params(self):

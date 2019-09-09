@@ -132,7 +132,7 @@ def load_model(args):
         model = espnetv2_seg(args)
     elif args.model == 'dicenet':
         from model.segmentation.dicenet import dicenet_seg
-        model = dicenet_seg(args, classes=args.classes)
+        model = dicenet_seg(args, classes=args.num_classes, scales=[1.0])
     else:
         print_error_message('{} network not yet supported'.format(args.model))
         exit(-1)
