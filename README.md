@@ -1,3 +1,5 @@
+### Forked from sacmehta/EdgeNets
+Adapted to test semantic microscope cell counting / segmentation on a Dicenet CNN
 # Efficient networks for Computer Vision
 
 This repo contains source code of our work on designing efficient networks for different computer vision tasks: <span style="color:blue"> (1) Image classification, (2) Object detection, and (3) Semantic segmentation.</span>
